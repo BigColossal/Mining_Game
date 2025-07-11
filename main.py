@@ -2,6 +2,7 @@ import pygame as pg
 import math
 from enum import Enum
 from collections import defaultdict
+import random
 
 
 # Initialize Pygame
@@ -26,14 +27,20 @@ TOTAL_GRID_WIDTH = GRID_WIDTH * GRID_SQUARE_SIZE
 TOTAL_GRID_HEIGHT = GRID_HEIGHT * GRID_SQUARE_SIZE
 
 # Visual settings
-BACKGROUND_COLOR = (15, 15, 15)
+BACKGROUND_COLOR = (20, 20, 20)
 SQUARE_COLOR = (200, 200, 200)
 
 # Load and scale sprites
 cave_tile_sprite = pg.image.load("assets/cave_tile.png").convert()
-cave_tile_sprite = pg.transform.scale(cave_tile_sprite, (80, 80))
+cave_tile_sprite = pg.transform.scale(cave_tile_sprite, (GRID_SQUARE_SIZE, GRID_SQUARE_SIZE))
 stone_block_sprite = pg.image.load("assets/stone_block.png").convert()
-stone_block_sprite = pg.transform.scale(stone_block_sprite, (80, 80))
+stone_block_sprite = pg.transform.scale(stone_block_sprite, (GRID_SQUARE_SIZE, GRID_SQUARE_SIZE))
+coal_ore_sprite = pg.image.load("assets/coal_ore_sprite.png").convert()
+coal_ore_sprite = pg.transform.scale(coal_ore_sprite, (GRID_SQUARE_SIZE, GRID_SQUARE_SIZE))
+emberrock_sprite = pg.image.load("assets/emberrock_sprite.png").convert()
+emberrock_sprite = pg.transform.scale(emberrock_sprite, (GRID_SQUARE_SIZE, GRID_SQUARE_SIZE))
+iron_ore_sprite = pg.image.load("assets/iron_ore.png").convert()
+iron_ore_sprite = pg.transform.scale(iron_ore_sprite, (GRID_SQUARE_SIZE, GRID_SQUARE_SIZE))
 
 start_offset_x = (TOTAL_GRID_WIDTH - SCREEN_WIDTH) // 2
 start_offset_y = (TOTAL_GRID_HEIGHT - SCREEN_HEIGHT) // 2
@@ -43,9 +50,18 @@ offset_y = start_offset_y
 glow_length = 80
 grid_glow_length = 100
 
-class Terrain(Enum):
-    Empty = 0,
-    Stone = 1,
+class Terrain:
+    Empty = 0
+    Stone = 1
+    Coal = 2
+    Emberrock = 3
+    Iron_ore = 4
+    Zone1_terrain_list = None
+    Zone1_terrain_chances = None
+
+    def init():
+        Terrain.Zone1_terrain_list = [Terrain.Stone, Terrain.Coal, Terrain.Emberrock, Terrain.Iron_ore]
+        Terrain.Zone1_terrain_chances = [76.5, 13.5, 6.5, 3.5]
 
 
 def create_terrain(floor_edge_map, terrain_edge_map):
@@ -59,7 +75,16 @@ def create_terrain(floor_edge_map, terrain_edge_map):
         for j in range(start, start + hub_area):
             terrain[i][j] = Terrain.Empty
             check_outlines(i, j, terrain, floor_edge_map, terrain_edge_map)
+
+    create_minerals(terrain)
     return terrain
+
+def create_minerals(terrain):
+    for i in range(len(terrain)):
+        for j in range(len(terrain[0])):
+            if terrain[i][j] != Terrain.Empty:
+                terrain[i][j] = random.choices(Terrain.Zone1_terrain_list, Terrain.Zone1_terrain_chances, k=1)[0]
+
 
 def draw_floor_shadow(screen, offset_x, offset_y):
     screen.blit(Glows.Grid_Top_Glow, (-offset_x, -offset_y - grid_glow_length))
@@ -71,31 +96,6 @@ def draw_floor_shadow(screen, offset_x, offset_y):
     screen.blit(Glows.Grid_Glow_TR, (TOTAL_GRID_WIDTH - offset_x, -offset_y - grid_glow_length))
     screen.blit(Glows.Grid_Glow_BL, (-offset_x - grid_glow_length, TOTAL_GRID_HEIGHT - offset_y))
     screen.blit(Glows.Grid_Glow_BR, (TOTAL_GRID_WIDTH - offset_x, TOTAL_GRID_HEIGHT - offset_y))
-
-
-
-
-def draw_floor(screen):
-    # Calculate how many tiles we need to draw on screen
-    tiles_x = SCREEN_WIDTH // GRID_SQUARE_SIZE + 2
-    tiles_y = SCREEN_HEIGHT // GRID_SQUARE_SIZE + 2
-
-    # Calculate starting tile positions based on camera offset
-    start_tile_x = math.floor(offset_x / GRID_SQUARE_SIZE)
-    start_tile_y = math.floor(offset_y / GRID_SQUARE_SIZE)
-
-    # Draw tiles in the visible area
-    for tile_x in range(start_tile_x, start_tile_x + tiles_x):
-        for tile_y in range(start_tile_y, start_tile_y + tiles_y):
-            # Check if tile is within grid boundaries
-            if 0 <= tile_x < GRID_WIDTH and 0 <= tile_y < GRID_HEIGHT:
-                screen_x = tile_x * GRID_SQUARE_SIZE - offset_x
-                screen_y = tile_y * GRID_SQUARE_SIZE - offset_y
-                
-                # Only draw if the tile is actually visible on screen
-                if (-GRID_SQUARE_SIZE < screen_x < SCREEN_WIDTH and 
-                    -GRID_SQUARE_SIZE < screen_y < SCREEN_HEIGHT):
-                    screen.blit(cave_tile_sprite, (screen_x, screen_y))
 
 
 def check_scroll(mouse_x, mouse_y, offset_x, offset_y):
@@ -114,9 +114,6 @@ def check_scroll(mouse_x, mouse_y, offset_x, offset_y):
     return offset_x, offset_y
 
 def draw_terrain(screen, terrain):
-    center_x = len(terrain[0]) // 2
-    center_y = len(terrain) // 2
-    empty_terrain = []
     for i in range(len(terrain)):
         for j in range(len(terrain[i])):
             screen_x = j * GRID_SQUARE_SIZE - offset_x
@@ -127,8 +124,14 @@ def draw_terrain(screen, terrain):
                 -GRID_SQUARE_SIZE < screen_y < SCREEN_HEIGHT):
                 if terrain[i][j] == Terrain.Stone:
                     screen.blit(stone_block_sprite, (int(screen_x), int(screen_y)))
+                elif terrain[i][j] == Terrain.Coal:
+                    screen.blit(coal_ore_sprite, (int(screen_x), int(screen_y)))
+                elif terrain[i][j] == Terrain.Emberrock:
+                    screen.blit(emberrock_sprite, (int(screen_x), int(screen_y)))
+                elif terrain[i][j] == Terrain.Iron_ore:
+                    screen.blit(iron_ore_sprite, (int(screen_x), int(screen_y)))
                 elif terrain[i][j] == Terrain.Empty:
-                    empty_terrain.append((i, j, screen_x, screen_y))
+                    screen.blit(cave_tile_sprite, (int(screen_x), int(screen_y)))
                 
 
 def draw_outlines(screen, edge_map, terrain_edge_map, offset_x, offset_y):
@@ -334,6 +337,7 @@ class Glows:
 def main():
 
     Glows.init()
+    Terrain.init()
     global offset_x, offset_y
     clock = pg.time.Clock()
     running = True
@@ -356,13 +360,12 @@ def main():
                 grid_y = (mouse_y + offset_y) // GRID_SQUARE_SIZE
 
                 if 0 <= grid_y < len(terrain) and 0 <= grid_x < len(terrain[0]):
-                    if terrain[grid_y][grid_x] == Terrain.Stone:
+                    if terrain[grid_y][grid_x] != Terrain.Empty:
                         terrain[grid_y][grid_x] = Terrain.Empty
                         check_outlines(grid_y, grid_x, terrain, floor_edge_map, terrain_edge_map)
  
         # Render
         screen.fill(BACKGROUND_COLOR)
-        draw_floor(screen)
         draw_floor_shadow(screen, offset_x, offset_y)
         draw_terrain(screen, terrain)
         draw_outlines(screen, floor_edge_map, terrain_edge_map, offset_x, offset_y)
