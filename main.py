@@ -20,7 +20,7 @@ SCROLL_SPEED = 10
 
 # Grid settings
 GRID_SQUARE_SIZE = 80
-GRID_WIDTH, GRID_HEIGHT = 20, 20
+GRID_WIDTH, GRID_HEIGHT = 30, 30
 
 # Calculate initial offset to center the grid
 TOTAL_GRID_WIDTH = GRID_WIDTH * GRID_SQUARE_SIZE
@@ -28,19 +28,9 @@ TOTAL_GRID_HEIGHT = GRID_HEIGHT * GRID_SQUARE_SIZE
 
 # Visual settings
 BACKGROUND_COLOR = (20, 20, 20)
-SQUARE_COLOR = (200, 200, 200)
 
 # Load and scale sprites
-cave_tile_sprite = pg.image.load("assets/cave_tile.png").convert()
-cave_tile_sprite = pg.transform.scale(cave_tile_sprite, (GRID_SQUARE_SIZE, GRID_SQUARE_SIZE))
-stone_block_sprite = pg.image.load("assets/stone_block.png").convert()
-stone_block_sprite = pg.transform.scale(stone_block_sprite, (GRID_SQUARE_SIZE, GRID_SQUARE_SIZE))
-coal_ore_sprite = pg.image.load("assets/coal_ore_sprite.png").convert()
-coal_ore_sprite = pg.transform.scale(coal_ore_sprite, (GRID_SQUARE_SIZE, GRID_SQUARE_SIZE))
-emberrock_sprite = pg.image.load("assets/emberrock_sprite.png").convert()
-emberrock_sprite = pg.transform.scale(emberrock_sprite, (GRID_SQUARE_SIZE, GRID_SQUARE_SIZE))
-iron_ore_sprite = pg.image.load("assets/iron_ore.png").convert()
-iron_ore_sprite = pg.transform.scale(iron_ore_sprite, (GRID_SQUARE_SIZE, GRID_SQUARE_SIZE))
+
 
 start_offset_x = (TOTAL_GRID_WIDTH - SCREEN_WIDTH) // 2
 start_offset_y = (TOTAL_GRID_HEIGHT - SCREEN_HEIGHT) // 2
@@ -63,6 +53,34 @@ class Terrain:
         Terrain.Zone1_terrain_list = [Terrain.Stone, Terrain.Coal, Terrain.Emberrock, Terrain.Iron_ore]
         Terrain.Zone1_terrain_chances = [76.5, 13.5, 6.5, 3.5]
 
+class TerrainSprites:
+    floor_sprite = None
+    stone_sprite = None
+    coal_ore_sprite = None
+    emberrock_sprite = None
+    iron_ore_sprite = None
+    hidden_block_sprite = None
+
+    @staticmethod
+    def init():
+        TerrainSprites.floor_sprite = TerrainSprites.preload_terrain(location="assets/cave_tile.png")
+        TerrainSprites.stone_sprite = TerrainSprites.preload_terrain(location="assets/stone_block.png")
+        TerrainSprites.coal_ore_sprite = TerrainSprites.preload_terrain(location="assets/coal_ore_sprite.png")
+        TerrainSprites.emberrock_sprite = TerrainSprites.preload_terrain(location="assets/emberrock_sprite.png")
+        TerrainSprites.iron_ore_sprite = TerrainSprites.preload_terrain(location="assets/iron_ore.png")
+        TerrainSprites.hidden_block_sprite = TerrainSprites.preload_terrain(sprite="n", color=(0, 0, 0))
+
+    def preload_terrain(sprite: str = "y", location: str = None, color: tuple[int, int, int] = None):
+        if sprite == "y":
+            terrain = pg.image.load(location).convert()
+            terrain = pg.transform.scale(terrain, (GRID_SQUARE_SIZE, GRID_SQUARE_SIZE))
+        elif sprite == "n":
+            terrain = pg.Surface((GRID_SQUARE_SIZE, GRID_SQUARE_SIZE))
+            terrain.fill(color)
+
+        return terrain
+
+
 
 def create_terrain(floor_edge_map, terrain_edge_map):
     terrain = [[Terrain.Stone for i in range(GRID_WIDTH)] for j in range(GRID_HEIGHT)]
@@ -71,12 +89,16 @@ def create_terrain(floor_edge_map, terrain_edge_map):
     hub_area = 4 # 4 x 4
 
     start = (GRID_WIDTH // 2) - 2
+    dirty_rects = []
     for i in range(start, start + hub_area):
         for j in range(start, start + hub_area):
             terrain[i][j] = Terrain.Empty
-            check_outlines(i, j, terrain, floor_edge_map, terrain_edge_map)
+            surrounding_terrain = check_outlines(i, j, terrain, floor_edge_map, terrain_edge_map)
+            dirty_rects.append((j, i))
+            dirty_rects += surrounding_terrain # to add to visible map
 
     create_minerals(terrain)
+    RenderGroups.draw_to_visible(terrain, dirty_rects)
     return terrain
 
 def create_minerals(terrain):
@@ -113,26 +135,8 @@ def check_scroll(mouse_x, mouse_y, offset_x, offset_y):
 
     return offset_x, offset_y
 
-def draw_terrain(screen, terrain):
-    for i in range(len(terrain)):
-        for j in range(len(terrain[i])):
-            screen_x = j * GRID_SQUARE_SIZE - offset_x
-            screen_y = i * GRID_SQUARE_SIZE - offset_y
-
-            # Only draw if the tile is actually visible on screen
-            if (-GRID_SQUARE_SIZE < screen_x < SCREEN_WIDTH and 
-                -GRID_SQUARE_SIZE < screen_y < SCREEN_HEIGHT):
-                if terrain[i][j] == Terrain.Stone:
-                    screen.blit(stone_block_sprite, (int(screen_x), int(screen_y)))
-                elif terrain[i][j] == Terrain.Coal:
-                    screen.blit(coal_ore_sprite, (int(screen_x), int(screen_y)))
-                elif terrain[i][j] == Terrain.Emberrock:
-                    screen.blit(emberrock_sprite, (int(screen_x), int(screen_y)))
-                elif terrain[i][j] == Terrain.Iron_ore:
-                    screen.blit(iron_ore_sprite, (int(screen_x), int(screen_y)))
-                elif terrain[i][j] == Terrain.Empty:
-                    screen.blit(cave_tile_sprite, (int(screen_x), int(screen_y)))
-                
+def draw_terrain(screen, offset_x, offset_y):
+    screen.blit(RenderGroups.visibleMap, (-offset_x, -offset_y))
 
 def draw_outlines(screen, edge_map, terrain_edge_map, offset_x, offset_y):
     outln_col = (0, 0, 0)
@@ -199,10 +203,13 @@ def draw_outlines(screen, edge_map, terrain_edge_map, offset_x, offset_y):
 
 def check_outlines(i, j, terrain, edge_map, terrain_edge_map):
     terrain_edge_map.pop((i, j), None)
+    dirty_rects = []
     if i + 1 < len(terrain):
         if terrain[i + 1][j] != Terrain.Empty: # down
             edge_map.append(((i, j), "down"))
             terrain_edge_map[(i + 1, j)].add("up")
+
+            dirty_rects.append((j, i + 1))
         else:
             terrain_edge_map[(i + 1, j)].discard("up")
             try:
@@ -214,6 +221,8 @@ def check_outlines(i, j, terrain, edge_map, terrain_edge_map):
         if terrain[i - 1][j] != Terrain.Empty: # up
             edge_map.append(((i, j), "up"))
             terrain_edge_map[(i - 1, j)].add("down")
+
+            dirty_rects.append((j, i - 1))
         else:
             terrain_edge_map[(i - 1, j)].discard("down")
             try:
@@ -225,6 +234,8 @@ def check_outlines(i, j, terrain, edge_map, terrain_edge_map):
         if terrain[i][j + 1] != Terrain.Empty: # right
             edge_map.append(((i, j), "right"))
             terrain_edge_map[(i, j + 1)].add("left")
+
+            dirty_rects.append((j + 1, i))
         else:
             terrain_edge_map[(i, j + 1)].discard("left")
             try:
@@ -236,12 +247,16 @@ def check_outlines(i, j, terrain, edge_map, terrain_edge_map):
         if terrain[i][j - 1] != Terrain.Empty: # left
             edge_map.append(((i, j), "left"))
             terrain_edge_map[(i, j - 1)].add("right")
+
+            dirty_rects.append((j - 1, i))
         else:
             terrain_edge_map[(i, j - 1)].discard("right")
             try:
                 edge_map.remove(((i, j - 1), "right"))
             except ValueError:
                 pass
+
+    return dirty_rects
 
 
 
@@ -289,6 +304,39 @@ def create_corner_glow(size, color, corner, glow_intensity=220):
             glow.set_at((x, y), (*color, alpha))
 
     return glow
+
+class RenderGroups:
+    visibleMap = None
+    hiddenMap = None
+    glowMap = None
+
+    @staticmethod
+    def init():
+        RenderGroups.visibleMap = pg.Surface((TOTAL_GRID_WIDTH, TOTAL_GRID_HEIGHT), pg.SRCALPHA)
+        RenderGroups.visibleMap.fill((5, 5, 5))
+        #RenderGroups.hiddenMap = pg.Surface((TOTAL_GRID_WIDTH, TOTAL_GRID_HEIGHT), pg.SRCALPHA) # to be added in the future potentially
+
+    def draw_to_visible(terrain, positions: list[tuple[int, int]]):
+        for tile in positions:
+            x, y = tile[0], tile[1]
+            map_x, map_y = x * GRID_SQUARE_SIZE, y * GRID_SQUARE_SIZE
+
+            terrain_type = terrain[y][x]
+            if terrain_type == Terrain.Stone:
+                RenderGroups.visibleMap.blit(TerrainSprites.stone_sprite, (map_x, map_y))
+            elif terrain_type == Terrain.Coal:
+                RenderGroups.visibleMap.blit(TerrainSprites.coal_ore_sprite, (map_x, map_y))
+            elif terrain_type == Terrain.Emberrock:
+                RenderGroups.visibleMap.blit(TerrainSprites.emberrock_sprite, (map_x, map_y))
+            elif terrain_type == Terrain.Iron_ore:
+                RenderGroups.visibleMap.blit(TerrainSprites.iron_ore_sprite, (map_x, map_y))
+            elif terrain_type == Terrain.Empty:
+                RenderGroups.visibleMap.blit(TerrainSprites.floor_sprite, (map_x, map_y))
+
+    #def draw_to_hidden(terrain: list[(int, int)]):
+        #for tile in terrain:
+            #x, y = tile
+            #RenderGroups.hiddenMap.blit(TerrainSprites.hidden_block_sprite, (x, y)) # to be added in the future
 
 
 class Glows:
@@ -338,6 +386,8 @@ def main():
 
     Glows.init()
     Terrain.init()
+    TerrainSprites.init()
+    RenderGroups.init()
     global offset_x, offset_y
     clock = pg.time.Clock()
     running = True
@@ -362,12 +412,14 @@ def main():
                 if 0 <= grid_y < len(terrain) and 0 <= grid_x < len(terrain[0]):
                     if terrain[grid_y][grid_x] != Terrain.Empty:
                         terrain[grid_y][grid_x] = Terrain.Empty
-                        check_outlines(grid_y, grid_x, terrain, floor_edge_map, terrain_edge_map)
- 
+                        surrounding_terrain = check_outlines(grid_y, grid_x, terrain, floor_edge_map, terrain_edge_map)
+                        dirty_rects = [(grid_x, grid_y)] + surrounding_terrain
+                        RenderGroups.draw_to_visible(terrain, dirty_rects)
+
         # Render
         screen.fill(BACKGROUND_COLOR)
         draw_floor_shadow(screen, offset_x, offset_y)
-        draw_terrain(screen, terrain)
+        draw_terrain(screen, offset_x, offset_y)
         draw_outlines(screen, floor_edge_map, terrain_edge_map, offset_x, offset_y)
         pg.display.flip()
 
