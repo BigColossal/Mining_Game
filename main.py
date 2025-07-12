@@ -87,14 +87,113 @@ class Miner():
         self.id = id
         self.sprite = pg.Surface((GRID_SQUARE_SIZE, GRID_SQUARE_SIZE), pg.SRCALPHA)
         pg.draw.circle(self.sprite, (100, 100, 10), (GRID_SQUARE_SIZE // 2, GRID_SQUARE_SIZE // 2), GRID_SQUARE_SIZE // 2)
-        self.position = self.set_position()
+        self.grid_pos = self.set_position()
+        self.pos = self.grid_pos
+        self.state = "searching"
+        self.moving_to = self.grid_pos
+        self.movement_speed = 2
+        self.direction = "down"
 
     def set_position(self):
-        return ((GRID_WIDTH // 2), ((GRID_WIDTH // 2) - 2))
+        spawn_positions = {
+            1: (((GRID_WIDTH // 2) + 1), ((GRID_WIDTH // 2) - 2)),
+            2: (((GRID_WIDTH // 2) - 2), ((GRID_WIDTH // 2) - 2)),  # Your OG spot
+            3: (((GRID_WIDTH // 2) - 2), ((GRID_WIDTH // 2) + 1)),
+            4: (((GRID_WIDTH // 2) - 2), ((GRID_WIDTH // 2) + 1)),
+            # Add more as needed
+        }
+
+        return spawn_positions[self.id]
 
     def draw(self, screen, offset_x, offset_y):
-        map_x, map_y = self.position[0] * GRID_SQUARE_SIZE - offset_x, self.position[1] * GRID_SQUARE_SIZE - offset_y
+        map_x, map_y = self.pos[0] * GRID_SQUARE_SIZE - offset_x, self.pos[1] * GRID_SQUARE_SIZE - offset_y
         screen.blit(self.sprite, (map_x, map_y))
+
+    def check_surroundings(self, terrain) -> list[tuple[int, str]]:
+        x, y = self.grid_pos
+        values = []
+        max_y = len(terrain)
+        max_x = len(terrain[0]) if max_y > 0 else 0
+
+        if x + 1 < max_x:
+            values.append((terrain[y][x + 1], "right"))
+        if x - 1 >= 0:
+            values.append((terrain[y][x - 1], "left"))
+        if y + 1 < max_y:
+            values.append((terrain[y + 1][x], "down"))
+        if y - 1 >= 0:
+            values.append((terrain[y - 1][x], "up"))
+
+        return values
+
+    
+    def find_best_direction(self, values):
+        # Extract just the ore values (first item in each tuple)
+        ore_values = [ore_value[0] for ore_value in values]
+        highest = max(ore_values)
+
+        # Collect all directions where that value is found
+        best_directions = [direction for value, direction in values if value == highest]
+
+        chosen_direction = random.choice(best_directions)
+
+        return chosen_direction
+    
+    def ai_action(self, terrain, floor_edge_map, terrain_edge_map):
+        if self.state == "searching":
+            self.mine(terrain, floor_edge_map, terrain_edge_map)
+        elif self.state == "moving":
+            self.move()
+
+    def mine(self, terrain, floor_edge_map, terrain_edge_map):
+        values = self.check_surroundings(terrain)
+        direction = self.find_best_direction(values)
+        x, y = self.grid_pos
+        if direction == "right":
+            if terrain[y][x + 1] != Terrain.Empty:
+                update_after_broken(terrain, x + 1, y, floor_edge_map, terrain_edge_map)
+            self.moving_to = (x + 1, y)
+        elif direction == "up":
+            if terrain[y - 1][x] != Terrain.Empty:
+                update_after_broken(terrain, x, y - 1, floor_edge_map, terrain_edge_map)
+            self.moving_to = (x, y - 1)
+        elif direction == "down":
+            if terrain[y + 1][x] != Terrain.Empty:
+                update_after_broken(terrain, x, y + 1, floor_edge_map, terrain_edge_map)
+            self.moving_to = (x, y + 1)
+        elif direction == "left":
+            if terrain[y][x - 1] != Terrain.Empty:
+                update_after_broken(terrain, x - 1, y, floor_edge_map, terrain_edge_map)
+            self.moving_to = (x - 1, y)
+
+        self.direction = direction
+        self.state = "moving"
+
+    def move(self):
+        movement_amnt = self.movement_speed / 100
+        x, y = self.pos[0], self.pos[1]
+        if self.direction == "up":
+            new_pos = (x, y - movement_amnt)
+        elif self.direction == "down":
+            new_pos = (x, y + movement_amnt)
+        elif self.direction == "left":
+            new_pos = (x - movement_amnt, y)
+        elif self.direction == "right":
+            new_pos = (x + movement_amnt, y)
+        
+        dx = abs(x - self.moving_to[0])
+        dy = abs(y - self.moving_to[1])
+        if dx > movement_amnt or dy > movement_amnt:
+            self.pos = new_pos
+            
+        else:
+            self.pos = self.moving_to
+            self.grid_pos = self.pos
+            self.state = "searching"
+
+    
+
+
 
 def create_miners(amount):
     miners = []
@@ -102,6 +201,11 @@ def create_miners(amount):
         miners.append(Miner(i + 1))
 
     return miners
+
+def miners_ai_action(miners, terrain, floor_edge_map, terrain_edge_map):
+    for miner in miners:
+        miner.ai_action(terrain, floor_edge_map, terrain_edge_map)
+
 
 def draw_miners(screen, offset_x, offset_y, miners):
     for miner in miners:
@@ -331,6 +435,12 @@ def create_corner_glow(size, color, corner, glow_intensity=220):
 
     return glow
 
+def update_after_broken(terrain, grid_x, grid_y, floor_edge_map, terrain_edge_map):
+    terrain[grid_y][grid_x] = Terrain.Empty
+    surrounding_terrain = check_outlines(grid_y, grid_x, terrain, floor_edge_map, terrain_edge_map)
+    dirty_rects = [(grid_x, grid_y)] + surrounding_terrain
+    RenderGroups.draw_to_visible(terrain, dirty_rects)
+
 class RenderGroups:
     visibleMap = None
     hiddenMap = None
@@ -419,7 +529,7 @@ def main():
     running = True
     floor_edge_map, terrain_edge_map = [], defaultdict(set)
     terrain = create_terrain(floor_edge_map, terrain_edge_map)
-    miners = create_miners(1)
+    miners = create_miners(4)
 # Main game loop
     while running:
         # Handle input
@@ -438,10 +548,9 @@ def main():
 
                 if 0 <= grid_y < len(terrain) and 0 <= grid_x < len(terrain[0]):
                     if terrain[grid_y][grid_x] != Terrain.Empty:
-                        terrain[grid_y][grid_x] = Terrain.Empty
-                        surrounding_terrain = check_outlines(grid_y, grid_x, terrain, floor_edge_map, terrain_edge_map)
-                        dirty_rects = [(grid_x, grid_y)] + surrounding_terrain
-                        RenderGroups.draw_to_visible(terrain, dirty_rects)
+                        update_after_broken(terrain, grid_x, grid_y, floor_edge_map, terrain_edge_map)
+
+        miners_ai_action(miners, terrain, floor_edge_map, terrain_edge_map)
 
         # Render
         screen.fill(BACKGROUND_COLOR)
