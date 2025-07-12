@@ -79,7 +79,33 @@ class TerrainSprites:
             terrain.fill(color)
 
         return terrain
+    
+class Miner():
+    miner_count = 0
+    def __init__(self, id):
+        Miner.miner_count += 1
+        self.id = id
+        self.sprite = pg.Surface((GRID_SQUARE_SIZE, GRID_SQUARE_SIZE), pg.SRCALPHA)
+        pg.draw.circle(self.sprite, (100, 100, 10), (GRID_SQUARE_SIZE // 2, GRID_SQUARE_SIZE // 2), GRID_SQUARE_SIZE // 2)
+        self.position = self.set_position()
 
+    def set_position(self):
+        return ((GRID_WIDTH // 2), ((GRID_WIDTH // 2) - 2))
+
+    def draw(self, screen, offset_x, offset_y):
+        map_x, map_y = self.position[0] * GRID_SQUARE_SIZE - offset_x, self.position[1] * GRID_SQUARE_SIZE - offset_y
+        screen.blit(self.sprite, (map_x, map_y))
+
+def create_miners(amount):
+    miners = []
+    for i in range(amount):
+        miners.append(Miner(i + 1))
+
+    return miners
+
+def draw_miners(screen, offset_x, offset_y, miners):
+    for miner in miners:
+        miner.draw(screen, offset_x, offset_y)
 
 
 def create_terrain(floor_edge_map, terrain_edge_map):
@@ -393,6 +419,7 @@ def main():
     running = True
     floor_edge_map, terrain_edge_map = [], defaultdict(set)
     terrain = create_terrain(floor_edge_map, terrain_edge_map)
+    miners = create_miners(1)
 # Main game loop
     while running:
         # Handle input
@@ -421,6 +448,7 @@ def main():
         draw_floor_shadow(screen, offset_x, offset_y)
         draw_terrain(screen, offset_x, offset_y)
         draw_outlines(screen, floor_edge_map, terrain_edge_map, offset_x, offset_y)
+        draw_miners(screen, offset_x, offset_y, miners)
         pg.display.flip()
 
         # Control frame rate
