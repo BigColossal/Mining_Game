@@ -17,6 +17,7 @@ pg.display.set_caption("Mining game")
 # Scrolling settings
 SCROLL_MARGIN = 50
 SCROLL_SPEED = 10
+FPS = 60
 
 # Grid settings
 GRID_SQUARE_SIZE = 80
@@ -48,10 +49,12 @@ class Terrain:
     Iron_ore = 4
     Zone1_terrain_list = None
     Zone1_terrain_chances = None
+    Zone1_terrain_max_healths = None
 
     def init():
         Terrain.Zone1_terrain_list = [Terrain.Stone, Terrain.Coal, Terrain.Emberrock, Terrain.Iron_ore]
         Terrain.Zone1_terrain_chances = [76.5, 13.5, 6.5, 3.5]
+        Terrain.Zone1_terrain_max_healths = [6, 15, 25, 40]
 
 class TerrainSprites:
     floor_sprite = None
@@ -82,31 +85,39 @@ class TerrainSprites:
     
 class Miner():
     miner_count = 0
+    all_mining_positions = []
     def __init__(self, id):
         Miner.miner_count += 1
         self.id = id
         self.sprite = pg.Surface((GRID_SQUARE_SIZE, GRID_SQUARE_SIZE), pg.SRCALPHA)
-        pg.draw.circle(self.sprite, (100, 100, 10), (GRID_SQUARE_SIZE // 2, GRID_SQUARE_SIZE // 2), GRID_SQUARE_SIZE // 2)
+        pg.draw.circle(self.sprite, (200, 200, 25), (GRID_SQUARE_SIZE // 2, GRID_SQUARE_SIZE // 2), GRID_SQUARE_SIZE // 2)
         self.grid_pos = self.set_position()
         self.pos = self.grid_pos
         self.state = "searching"
         self.moving_to = self.grid_pos
+        self.mining_pos = (0, 0)
+        Miner.all_mining_positions.append(self.mining_pos)
+
         self.movement_speed = 2
         self.direction = "down"
+        self.pickaxe = Pickaxe("wooden pickaxe", 1)
+
+        self.cd = 0.50 # cool down
+        self.dt = self.cd # down time
 
     def set_position(self):
         spawn_positions = {
             1: (((GRID_WIDTH // 2) + 1), ((GRID_WIDTH // 2) - 2)),
             2: (((GRID_WIDTH // 2) - 2), ((GRID_WIDTH // 2) - 2)),  # Your OG spot
             3: (((GRID_WIDTH // 2) - 2), ((GRID_WIDTH // 2) + 1)),
-            4: (((GRID_WIDTH // 2) - 2), ((GRID_WIDTH // 2) + 1)),
+            4: (((GRID_WIDTH // 2) + 1), ((GRID_WIDTH // 2) + 1)),
             # Add more as needed
         }
 
         return spawn_positions[self.id]
 
-    def draw(self, screen, offset_x, offset_y):
-        map_x, map_y = self.pos[0] * GRID_SQUARE_SIZE - offset_x, self.pos[1] * GRID_SQUARE_SIZE - offset_y
+    def draw(self, screen):
+        map_x, map_y = self.pos[0] * GRID_SQUARE_SIZE, self.pos[1] * GRID_SQUARE_SIZE
         screen.blit(self.sprite, (map_x, map_y))
 
     def check_surroundings(self, terrain) -> list[tuple[int, str]]:
@@ -129,7 +140,8 @@ class Miner():
     
     def find_best_direction(self, values):
         # Extract just the ore values (first item in each tuple)
-        ore_values = [ore_value[0] for ore_value in values]
+
+        ore_values = [ore_value[0] for ore_value in values if not self.check_for_occupied(ore_value[1])]
         highest = max(ore_values)
 
         # Collect all directions where that value is found
@@ -139,35 +151,91 @@ class Miner():
 
         return chosen_direction
     
-    def ai_action(self, terrain, floor_edge_map, terrain_edge_map):
+    def check_for_occupied(self, direction):
+        x, y = self.grid_pos
+        if direction == "right":
+            if (x + 1, y) in Miner.all_mining_positions:
+                return True
+        elif direction == "left":
+            if (x - 1, y) in Miner.all_mining_positions:
+                return True
+        elif direction == "down":
+            if (x, y + 1) in Miner.all_mining_positions:
+                return True
+        elif direction == "up":
+            if (x, y - 1) in Miner.all_mining_positions:
+                return True
+        return False
+    
+    def ai_action(self, terrain, floor_edge_map, terrain_edge_map, terrain_health_map, terrain_to_be_faded, delta_time):
         if self.state == "searching":
-            self.mine(terrain, floor_edge_map, terrain_edge_map)
+            self.search(terrain, floor_edge_map, terrain_edge_map)
         elif self.state == "moving":
             self.move()
+        elif self.state == "mining":
+            self.mine_process(terrain, [floor_edge_map, terrain_edge_map, terrain_health_map, terrain_to_be_faded], delta_time)
 
-    def mine(self, terrain, floor_edge_map, terrain_edge_map):
+    def search(self, terrain, floor_edge_map, terrain_edge_map):
         values = self.check_surroundings(terrain)
         direction = self.find_best_direction(values)
         x, y = self.grid_pos
-        if direction == "right":
-            if terrain[y][x + 1] != Terrain.Empty:
-                update_after_broken(terrain, x + 1, y, floor_edge_map, terrain_edge_map)
-            self.moving_to = (x + 1, y)
-        elif direction == "up":
-            if terrain[y - 1][x] != Terrain.Empty:
-                update_after_broken(terrain, x, y - 1, floor_edge_map, terrain_edge_map)
-            self.moving_to = (x, y - 1)
-        elif direction == "down":
-            if terrain[y + 1][x] != Terrain.Empty:
-                update_after_broken(terrain, x, y + 1, floor_edge_map, terrain_edge_map)
-            self.moving_to = (x, y + 1)
-        elif direction == "left":
-            if terrain[y][x - 1] != Terrain.Empty:
-                update_after_broken(terrain, x - 1, y, floor_edge_map, terrain_edge_map)
-            self.moving_to = (x - 1, y)
 
+        if direction == "right":
+            selected_loc = (x + 1, y)
+            if terrain[y][x + 1] != Terrain.Empty:
+                self.state = "mining"
+                self.mining_pos = selected_loc
+                Miner.all_mining_positions[self.id - 1] = self.mining_pos
+            else:
+                self.state = "moving"
+
+        elif direction == "up":
+            selected_loc = (x, y - 1)
+            if terrain[y - 1][x] != Terrain.Empty:
+                self.state = "mining"
+                self.mining_pos = selected_loc
+                Miner.all_mining_positions[self.id - 1] = self.mining_pos
+            else:
+                self.state = "moving"
+
+        elif direction == "down":
+            selected_loc = (x, y + 1)
+            if terrain[y + 1][x] != Terrain.Empty:
+                self.state = "mining"
+                self.mining_pos = selected_loc
+                Miner.all_mining_positions[self.id - 1] = self.mining_pos
+            else:
+                self.state = "moving"
+
+        elif direction == "left":
+            selected_loc = (x - 1, y)
+            if terrain[y][x - 1] != Terrain.Empty:
+                self.state = "mining"
+                self.mining_pos = selected_loc
+                Miner.all_mining_positions[self.id - 1] = self.mining_pos
+            else:
+                self.state = "moving"
+
+        self.moving_to = selected_loc
         self.direction = direction
-        self.state = "moving"
+
+    def mine_process(self, terrain, maps: list,  delta_time):
+        floor_edge_map, terrain_edge_map, terrain_health_map, terrain_to_be_faded = maps
+        x, y = self.mining_pos
+        if self.dt <= 0:
+            terrain_health_map[self.mining_pos] -= self.pickaxe.damage
+
+            selected_ore_max_hp = Terrain.Zone1_terrain_max_healths[terrain[y][x] - 1]
+            if terrain_health_map[self.mining_pos] <= 0:
+                update_after_broken(terrain, x, y, floor_edge_map, terrain_edge_map, terrain_health_map, terrain_to_be_faded)
+                self.state = "moving"
+            else:
+                current_health_percent = (terrain_health_map[self.mining_pos] / selected_ore_max_hp) * 100
+                RenderGroups.draw_health_bar(x, y, current_health_percent)
+            self.dt = self.cd
+
+        else:
+            self.dt -= delta_time
 
     def move(self):
         movement_amnt = self.movement_speed / 100
@@ -191,28 +259,30 @@ class Miner():
             self.grid_pos = self.pos
             self.state = "searching"
 
-    
+class Pickaxe():
+    def __init__(self, name, power):
+        self.name = name
+        self.power = power
+        self.damage = self.set_damage()
 
-
+    def set_damage(self):
+        return self.power * 2
 
 def create_miners(amount):
     miners = []
     for i in range(amount):
         miners.append(Miner(i + 1))
+    RenderGroups.draw_miners(miners)
 
     return miners
 
-def miners_ai_action(miners, terrain, floor_edge_map, terrain_edge_map):
+def miners_ai_action(miners, terrain, floor_edge_map, terrain_edge_map, terrain_health_map, terrain_to_be_faded, dt):
     for miner in miners:
-        miner.ai_action(terrain, floor_edge_map, terrain_edge_map)
+        miner.ai_action(terrain, floor_edge_map, terrain_edge_map, terrain_health_map, terrain_to_be_faded, dt)
+    RenderGroups.draw_miners(miners)
 
 
-def draw_miners(screen, offset_x, offset_y, miners):
-    for miner in miners:
-        miner.draw(screen, offset_x, offset_y)
-
-
-def create_terrain(floor_edge_map, terrain_edge_map):
+def create_terrain(floor_edge_map, terrain_edge_map, terrain_health_map, terrain_to_be_faded):
     terrain = [[Terrain.Stone for i in range(GRID_WIDTH)] for j in range(GRID_HEIGHT)]
 
     # Hub creation, or the area where NPCs will spawn
@@ -229,6 +299,8 @@ def create_terrain(floor_edge_map, terrain_edge_map):
 
     create_minerals(terrain)
     RenderGroups.draw_to_visible(terrain, dirty_rects)
+    create_terrain_health(terrain, dirty_rects, terrain_health_map)
+    terrain_to_be_faded.append((start - 1, start - 1, start + 5, start + 5, 1.0))
     return terrain
 
 def create_minerals(terrain):
@@ -237,6 +309,11 @@ def create_minerals(terrain):
             if terrain[i][j] != Terrain.Empty:
                 terrain[i][j] = random.choices(Terrain.Zone1_terrain_list, Terrain.Zone1_terrain_chances, k=1)[0]
 
+def create_terrain_health(terrain, visible_blocks, terrain_health_map):
+    for x, y in visible_blocks:
+        current = terrain[y][x]
+        if current != Terrain.Empty:
+            terrain_health_map[(x, y)] = Terrain.Zone1_terrain_max_healths[current - 1]
 
 def draw_floor_shadow(screen, offset_x, offset_y):
     screen.blit(Glows.Grid_Top_Glow, (-offset_x, -offset_y - grid_glow_length))
@@ -250,23 +327,31 @@ def draw_floor_shadow(screen, offset_x, offset_y):
     screen.blit(Glows.Grid_Glow_BR, (TOTAL_GRID_WIDTH - offset_x, TOTAL_GRID_HEIGHT - offset_y))
 
 
-def check_scroll(mouse_x, mouse_y, offset_x, offset_y):
-    # Horizontal scrolling
-    if mouse_x < SCROLL_MARGIN and offset_x > (start_offset_x - (TOTAL_GRID_WIDTH // 2)):
+def check_camera(keys, offset_x, offset_y):
+    if keys[pg.K_a] and offset_x > (start_offset_x - (TOTAL_GRID_WIDTH // 2)):
         offset_x -= SCROLL_SPEED
-    elif mouse_x > SCREEN_WIDTH - SCROLL_MARGIN and offset_x < (start_offset_x + (TOTAL_GRID_WIDTH // 2)):
+    elif keys[pg.K_d] and offset_x < (start_offset_x + (TOTAL_GRID_WIDTH // 2)):
         offset_x += SCROLL_SPEED
 
-    # Vertical scrolling
-    if mouse_y < SCROLL_MARGIN and offset_y > (start_offset_y - (TOTAL_GRID_HEIGHT // 2)):
-        offset_y -= SCROLL_SPEED 
-    elif mouse_y > SCREEN_HEIGHT - SCROLL_MARGIN and offset_y < (start_offset_y + (TOTAL_GRID_HEIGHT // 2)):
+    # Vertical movement
+    if keys[pg.K_w] and offset_y > (start_offset_y - (TOTAL_GRID_HEIGHT // 2)):
+        offset_y -= SCROLL_SPEED
+    elif keys[pg.K_s] and offset_y < (start_offset_y + (TOTAL_GRID_HEIGHT // 2)):
         offset_y += SCROLL_SPEED
 
     return offset_x, offset_y
 
 def draw_terrain(screen, offset_x, offset_y):
     screen.blit(RenderGroups.visibleMap, (-offset_x, -offset_y))
+
+def draw_miners(screen, offset_x, offset_y):
+    screen.blit(RenderGroups.minerMap, (-offset_x, -offset_y))
+
+def draw_healthbars(screen, offset_x, offset_y):
+    screen.blit(RenderGroups.HealthBarMap, (-offset_x, -offset_y))
+
+def draw_hidden(screen, offset_x, offset_y):
+    screen.blit(RenderGroups.hiddenMap, (-offset_x, -offset_y))
 
 def draw_outlines(screen, edge_map, terrain_edge_map, offset_x, offset_y):
     outln_col = (0, 0, 0)
@@ -435,22 +520,37 @@ def create_corner_glow(size, color, corner, glow_intensity=220):
 
     return glow
 
-def update_after_broken(terrain, grid_x, grid_y, floor_edge_map, terrain_edge_map):
+def update_after_broken(terrain, grid_x, grid_y, floor_edge_map, terrain_edge_map, terrain_health_map, terrain_to_be_faded):
     terrain[grid_y][grid_x] = Terrain.Empty
     surrounding_terrain = check_outlines(grid_y, grid_x, terrain, floor_edge_map, terrain_edge_map)
     dirty_rects = [(grid_x, grid_y)] + surrounding_terrain
+    create_terrain_health(terrain, dirty_rects, terrain_health_map)
     RenderGroups.draw_to_visible(terrain, dirty_rects)
+    RenderGroups.erase_health_bar(grid_x, grid_y)
+    terrain_to_be_faded += [(
+        x,
+        y,
+        x,
+        y,
+        1.0  # start fully opaque
+    )
+    for x, y in surrounding_terrain]
+
 
 class RenderGroups:
     visibleMap = None
     hiddenMap = None
-    glowMap = None
+    HealthBarMap = None
+    minerMap = None
 
     @staticmethod
     def init():
         RenderGroups.visibleMap = pg.Surface((TOTAL_GRID_WIDTH, TOTAL_GRID_HEIGHT), pg.SRCALPHA)
         RenderGroups.visibleMap.fill((5, 5, 5))
-        #RenderGroups.hiddenMap = pg.Surface((TOTAL_GRID_WIDTH, TOTAL_GRID_HEIGHT), pg.SRCALPHA) # to be added in the future potentially
+        RenderGroups.minerMap = pg.Surface((TOTAL_GRID_WIDTH, TOTAL_GRID_HEIGHT), pg.SRCALPHA)
+        RenderGroups.HealthBarMap = pg.Surface((TOTAL_GRID_WIDTH, TOTAL_GRID_HEIGHT), pg.SRCALPHA)
+        RenderGroups.hiddenMap = pg.Surface((TOTAL_GRID_WIDTH, TOTAL_GRID_HEIGHT), pg.SRCALPHA)
+        RenderGroups.hiddenMap.fill((5, 5, 5))
 
     def draw_to_visible(terrain, positions: list[tuple[int, int]]):
         for tile in positions:
@@ -469,10 +569,57 @@ class RenderGroups:
             elif terrain_type == Terrain.Empty:
                 RenderGroups.visibleMap.blit(TerrainSprites.floor_sprite, (map_x, map_y))
 
-    #def draw_to_hidden(terrain: list[(int, int)]):
-        #for tile in terrain:
-            #x, y = tile
-            #RenderGroups.hiddenMap.blit(TerrainSprites.hidden_block_sprite, (x, y)) # to be added in the future
+    def draw_miners(miners):
+        RenderGroups.minerMap.fill((0, 0, 0, 0))
+        for miner in miners:
+            miner.draw(RenderGroups.minerMap)
+
+    def draw_health_bar(x, y, health_percent):
+        map_x, map_y = x * GRID_SQUARE_SIZE, y * GRID_SQUARE_SIZE
+        # Background (e.g., dark gray)
+        pg.draw.rect(RenderGroups.HealthBarMap, (40, 40, 40), (map_x, map_y, GRID_SQUARE_SIZE, 10))
+
+        # Fill (e.g., green) — scaled to health percentage
+        fill_width = int(GRID_SQUARE_SIZE * (health_percent / 100))
+        pg.draw.rect(RenderGroups.HealthBarMap, (0, 255, 0), (map_x, map_y, fill_width, 10))
+
+    def erase_health_bar(x, y):
+        map_x, map_y = x * GRID_SQUARE_SIZE, y * GRID_SQUARE_SIZE
+        RenderGroups.HealthBarMap.fill((0, 0, 0, 0), rect=(map_x, map_y, GRID_SQUARE_SIZE, 10))
+
+
+    def unreveal_hidden(terrain: list[(int, int, int, int, int)], fade_speed=0.05):
+        # unreveal phase can between 0 and 1: 1 - 0.01 means in the process of revealing, 0 means done
+        updated_terrain = []
+
+        for x1, y1, x2, y2, unreveal_phase in terrain:
+
+            # Clamp phase between 0 and 1 just in case
+            unreveal_phase = max(0.0, unreveal_phase)
+
+            # Calculate current alpha (0 fully transparent → 255 fully opaque)
+            alpha = int(255 * unreveal_phase)
+
+            # Create the fading rect
+            rect_x = x1 * GRID_SQUARE_SIZE
+            rect_y = y1 * GRID_SQUARE_SIZE
+            width = max(1.0, (x2 - x1)) * GRID_SQUARE_SIZE
+            height = max(1.0, (y2 - y1)) * GRID_SQUARE_SIZE
+
+            # Draw it on the hidden surface at the proper location
+            RenderGroups.hiddenMap.fill((5, 5, 5, alpha), rect=(rect_x, rect_y, width, height))
+
+            # Update the phase for next frame
+            new_phase = unreveal_phase - fade_speed
+
+            if new_phase > 0:
+                updated_terrain.append((x1, y1, x2, y2, new_phase))
+            # If new_phase <= 0, the block is fully revealed — skip re-adding
+
+        return updated_terrain
+
+
+        
 
 
 class Glows:
@@ -528,40 +675,39 @@ def main():
     clock = pg.time.Clock()
     running = True
     floor_edge_map, terrain_edge_map = [], defaultdict(set)
-    terrain = create_terrain(floor_edge_map, terrain_edge_map)
+    terrain_health_map = {}
+    terrain_to_be_faded = []
+    terrain = create_terrain(floor_edge_map, terrain_edge_map, terrain_health_map, terrain_to_be_faded)
     miners = create_miners(4)
+    dt = 0.0
 # Main game loop
     while running:
         # Handle input
-        mouse_x, mouse_y = pg.mouse.get_pos()
-        offset_x, offset_y = check_scroll(mouse_x, mouse_y, offset_x, offset_y)
+        keys = pg.key.get_pressed()
+        offset_x, offset_y = check_camera(keys, offset_x, offset_y)
+        
 
         # Handle events-
         for event in pg.event.get():
             if event.type == pg.QUIT:
                 running = False
-            if event.type == pg.MOUSEBUTTONDOWN and event.button == 1:  # Left click
-                mouse_x, mouse_y = pg.mouse.get_pos()
 
-                grid_x = (mouse_x + offset_x) // GRID_SQUARE_SIZE
-                grid_y = (mouse_y + offset_y) // GRID_SQUARE_SIZE
-
-                if 0 <= grid_y < len(terrain) and 0 <= grid_x < len(terrain[0]):
-                    if terrain[grid_y][grid_x] != Terrain.Empty:
-                        update_after_broken(terrain, grid_x, grid_y, floor_edge_map, terrain_edge_map)
-
-        miners_ai_action(miners, terrain, floor_edge_map, terrain_edge_map)
+        miners_ai_action(miners, terrain, floor_edge_map, terrain_edge_map, terrain_health_map, terrain_to_be_faded, dt)
+        if len(terrain_to_be_faded) >= 1:
+            terrain_to_be_faded = RenderGroups.unreveal_hidden(terrain_to_be_faded)
 
         # Render
         screen.fill(BACKGROUND_COLOR)
         draw_floor_shadow(screen, offset_x, offset_y)
         draw_terrain(screen, offset_x, offset_y)
+        draw_miners(screen, offset_x, offset_y)
         draw_outlines(screen, floor_edge_map, terrain_edge_map, offset_x, offset_y)
-        draw_miners(screen, offset_x, offset_y, miners)
+        draw_healthbars(screen, offset_x, offset_y)
+        draw_hidden(screen, offset_x, offset_y)
         pg.display.flip()
 
         # Control frame rate
-        clock.tick(60) 
+        dt = clock.tick(FPS) / 1000
 
     pg.quit()
 
