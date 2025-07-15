@@ -86,6 +86,7 @@ class TerrainSprites:
 class Miner():
     miner_count = 0
     all_mining_positions = []
+    glow_radius = 4
     def __init__(self, id):
         Miner.miner_count += 1
         self.id = id
@@ -105,6 +106,8 @@ class Miner():
         self.cd = 0.50 # cool down
         self.dt = self.cd # down time
 
+        self.visibile_tiles = []
+
     def set_position(self):
         spawn_positions = {
             1: (((GRID_WIDTH // 2) + 1), ((GRID_WIDTH // 2) - 2)),
@@ -119,6 +122,26 @@ class Miner():
     def draw(self, screen):
         map_x, map_y = self.pos[0] * GRID_SQUARE_SIZE, self.pos[1] * GRID_SQUARE_SIZE
         screen.blit(self.sprite, (map_x, map_y))
+        return (self.pos[0], self.pos[1])
+
+    def ray_trace_surroundings(self, terrain, MAX_RADIUS=6):
+        MAX_RADIUS = 6
+        visible_tiles = set()
+        for angle in range(0, 360, 10):
+            dx = math.cos(math.radians(angle))
+            dy = math.sin(math.radians(angle))
+            x, y = self.pos
+
+            for i in range(MAX_RADIUS):
+                x += dx
+                y += dy
+                grid_x, grid_y = int(x), int(y)
+
+                if terrain[grid_y][grid_x] != Terrain.Empty:
+                    break
+                visible_tiles.add((grid_x, grid_y))
+
+        self.visibile_tiles = visible_tiles
 
     def check_surroundings(self, terrain) -> list[tuple[int, str]]:
         x, y = self.grid_pos
@@ -169,13 +192,13 @@ class Miner():
     
     def ai_action(self, terrain, floor_edge_map, terrain_edge_map, terrain_health_map, terrain_to_be_faded, delta_time):
         if self.state == "searching":
-            self.search(terrain, floor_edge_map, terrain_edge_map)
+            self.search(terrain)
         elif self.state == "moving":
             self.move()
         elif self.state == "mining":
             self.mine_process(terrain, [floor_edge_map, terrain_edge_map, terrain_health_map, terrain_to_be_faded], delta_time)
 
-    def search(self, terrain, floor_edge_map, terrain_edge_map):
+    def search(self, terrain):
         values = self.check_surroundings(terrain)
         direction = self.find_best_direction(values)
         x, y = self.grid_pos
@@ -345,6 +368,7 @@ def draw_terrain(screen, offset_x, offset_y):
     screen.blit(RenderGroups.visibleMap, (-offset_x, -offset_y))
 
 def draw_miners(screen, offset_x, offset_y):
+    screen.blit(RenderGroups.minerLightMap, (-offset_x, -offset_y))
     screen.blit(RenderGroups.minerMap, (-offset_x, -offset_y))
 
 def draw_healthbars(screen, offset_x, offset_y):
@@ -520,6 +544,23 @@ def create_corner_glow(size, color, corner, glow_intensity=220):
 
     return glow
 
+def create_miner_glow(radius, color, glow_intensity=75):
+    radius *= GRID_SQUARE_SIZE
+    glow_surface = pg.Surface((radius * 2, radius * 2), pg.SRCALPHA)
+    for x in range(radius * 2):
+        for y in range(radius * 2):
+            dx = x - radius
+            dy = y - radius
+            dist = math.hypot(dx, dy)
+            if dist <= radius:
+                normalized = dist / radius  # 0.0 center → 1.0 edge
+                fade_alpha = int((1.0 - normalized ** 2.0) * glow_intensity)
+                glow_surface.set_at((x, y), (*color, fade_alpha))
+
+    return glow_surface
+
+
+
 def update_after_broken(terrain, grid_x, grid_y, floor_edge_map, terrain_edge_map, terrain_health_map, terrain_to_be_faded):
     terrain[grid_y][grid_x] = Terrain.Empty
     surrounding_terrain = check_outlines(grid_y, grid_x, terrain, floor_edge_map, terrain_edge_map)
@@ -542,6 +583,7 @@ class RenderGroups:
     hiddenMap = None
     HealthBarMap = None
     minerMap = None
+    minerLightMap = None
 
     @staticmethod
     def init():
@@ -551,6 +593,7 @@ class RenderGroups:
         RenderGroups.HealthBarMap = pg.Surface((TOTAL_GRID_WIDTH, TOTAL_GRID_HEIGHT), pg.SRCALPHA)
         RenderGroups.hiddenMap = pg.Surface((TOTAL_GRID_WIDTH, TOTAL_GRID_HEIGHT), pg.SRCALPHA)
         RenderGroups.hiddenMap.fill((5, 5, 5))
+        RenderGroups.minerLightMap = pg.Surface((TOTAL_GRID_WIDTH, TOTAL_GRID_HEIGHT), pg.SRCALPHA)
 
     def draw_to_visible(terrain, positions: list[tuple[int, int]]):
         for tile in positions:
@@ -571,8 +614,11 @@ class RenderGroups:
 
     def draw_miners(miners):
         RenderGroups.minerMap.fill((0, 0, 0, 0))
+        miner_positions = []
         for miner in miners:
-            miner.draw(RenderGroups.minerMap)
+            miner_positions.append(miner.draw(RenderGroups.minerMap))
+        RenderGroups.draw_miner_light(miner_positions)
+
 
     def draw_health_bar(x, y, health_percent):
         map_x, map_y = x * GRID_SQUARE_SIZE, y * GRID_SQUARE_SIZE
@@ -598,7 +644,10 @@ class RenderGroups:
             unreveal_phase = max(0.0, unreveal_phase)
 
             # Calculate current alpha (0 fully transparent → 255 fully opaque)
-            alpha = int(255 * unreveal_phase)
+            fade_strength = unreveal_phase ** 1.5  # optional easing for smoother start
+            alpha = int(50 + (205 * fade_strength))  # 150 + remainder of 255 - 150
+
+
 
             # Create the fading rect
             rect_x = x1 * GRID_SQUARE_SIZE
@@ -617,10 +666,14 @@ class RenderGroups:
             # If new_phase <= 0, the block is fully revealed — skip re-adding
 
         return updated_terrain
-
-
+    
+    def draw_miner_light(miner_coords: list[tuple[int, int]]):
         
-
+        RenderGroups.minerLightMap.fill((0, 0, 0, 0))  # faint blue tint
+        for x, y in miner_coords:
+            map_x, map_y = x * GRID_SQUARE_SIZE, y * GRID_SQUARE_SIZE
+            RenderGroups.minerLightMap.blit(Glows.Glow_Miner, (map_x - (Miner.glow_radius * GRID_SQUARE_SIZE) + (GRID_SQUARE_SIZE // 2), map_y - (Miner.glow_radius * GRID_SQUARE_SIZE) + (GRID_SQUARE_SIZE // 2)))
+        
 
 class Glows:
     Glow_Up = None
@@ -643,6 +696,8 @@ class Glows:
     Grid_Glow_BL = None
     Grid_Glow_TR = None
     Grid_Glow_BR = None
+    Glow_Miner = None
+    miner_glow_color = (255, 150, 50)
 
     @staticmethod
     def init():
@@ -662,6 +717,7 @@ class Glows:
         Glows.Grid_Glow_TR = create_corner_glow(grid_glow_length, Glows.grid_glow_color, "TR").convert_alpha()
         Glows.Grid_Glow_BL = create_corner_glow(grid_glow_length, Glows.grid_glow_color, "BL").convert_alpha()
         Glows.Grid_Glow_BR = create_corner_glow(grid_glow_length, Glows.grid_glow_color, "BR").convert_alpha()
+        Glows.Glow_Miner = create_miner_glow(Miner.glow_radius, Glows.miner_glow_color).convert_alpha()
 
 
 
